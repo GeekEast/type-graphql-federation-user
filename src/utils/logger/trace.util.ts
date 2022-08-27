@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { highlight } from "cli-highlight"
 import safeStringify from "fast-safe-stringify"
 import { performance } from "perf_hooks"
@@ -11,6 +12,34 @@ interface Options {
   logInput?: {
     enabled?: boolean
     beautify?: boolean
+  }
+}
+
+export function Trace({
+  disable = [],
+  perf = false,
+  memWatch = false,
+  logInput = { enabled: true, beautify: false }
+}: Options): ClassDecorator {
+  return (target: Function) => {
+    for (const propertyName of Object.getOwnPropertyNames(target.prototype)) {
+      // ignore constructor and disabled class method
+      if (propertyName === "constructor") continue
+      if (!!disable && disable.includes(propertyName)) continue
+
+      const descriptor = Object.getOwnPropertyDescriptor(target.prototype, propertyName)
+      descriptor.configurable = true
+      descriptor.writable = true
+      const isMethod = descriptor.value instanceof Function
+      // ignore attributes
+      if (!isMethod) continue
+
+      // modify the method
+      const modifiedDescriptor = FuncTrace(target.name, propertyName, descriptor, logInput, perf, memWatch)
+
+      // apply the change
+      Object.defineProperty(target.prototype, propertyName, modifiedDescriptor)
+    }
   }
 }
 
@@ -34,7 +63,7 @@ const FuncTrace = (
 
   const path = `${className}.${propertyKey}`
   const originalMethod = descriptor.value
-  descriptor.value = function (...args: unknown[]) {
+  descriptor.value = function (...args: any[]) {
     logInput(layer, path, args, inputLog.enabled, inputLog.beautify)
 
     // pre: mem monitor
@@ -73,61 +102,19 @@ const FuncTrace = (
         Logger.error(`${layer}:Performance:Error: ${path} Consumed memory: ${memoryMargin} MB`)
       }
     }
-
-    Logger.info(`${layer} Layer: ${path} ended`)
     return result
   }
   return descriptor
 }
 
-const logInput = (layer: string, path: string, args: unknown, enabled = true, beautify = false) => {
-  if (!enabled) return
+const plainLog = (input: any) => safeStringify(input)
 
-  Logger.info(`${layer} Layer: ${path} started`)
-  Logger.info(`============= ${layer} Layer: ${path} input arguments =============`)
-  beautify ? Logger.info(highlight(safeStringify(args, null, 2)), false) : Logger.info(safeStringify(args))
-  Logger.info(`============= ${layer} Layer: ${path} input arguments =============`)
+const beautifyLog = (input: any) => highlight(safeStringify(input, null, 2))
+
+const logInput = (layer: string, path: string, args: any[], enabled = true, beautify = false) => {
+  if (!enabled) return
+  const markedArgs = { layer, path, args }
+  beautify ? Logger.info(beautifyLog(markedArgs)) : Logger.info(plainLog(markedArgs))
 }
 
 const bytesToMB = (bytes: number) => Math.round(bytes / 1024 / 1024)
-
-/**
- * @param option:
- * - disable: disable specific function trace within a class
- * - perf: enable performance monitor
- * - memWatch: enable memory monitor
- * - logInput: {
- *  enabled: enable input log
- *  beautify: enable input log beautify
- * }
- *
- * e.g @Trace({ perf: true, logInput: { enabled: true, beautify: true } })
- * @returns {MethodDecorator} - decorator
- */
-export function Trace({
-  disable = [],
-  perf = false,
-  memWatch = false,
-  logInput = { enabled: true, beautify: false }
-}: Options): ClassDecorator {
-  return (target: Function) => {
-    for (const propertyName of Object.getOwnPropertyNames(target.prototype)) {
-      // ignore constructor and disabled class method
-      if (propertyName === "constructor") continue
-      if (!!disable && disable.includes(propertyName)) continue
-
-      const descriptor = Object.getOwnPropertyDescriptor(target.prototype, propertyName)
-      descriptor.configurable = true
-      descriptor.writable = true
-      const isMethod = descriptor.value instanceof Function
-      // ignore attributes
-      if (!isMethod) continue
-
-      // modify the method
-      const modifiedDescriptor = FuncTrace(target.name, propertyName, descriptor, logInput, perf, memWatch)
-
-      // apply the change
-      Object.defineProperty(target.prototype, propertyName, modifiedDescriptor)
-    }
-  }
-}
